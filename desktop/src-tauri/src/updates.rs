@@ -55,7 +55,12 @@ enum Trigger {
 /// macOS the feed names the Chromium build, so the WebKit app updates into it
 /// and the Chromium app keeps updating from it.
 fn updates_enabled() -> bool {
-    !cfg!(debug_assertions) && crate::server::updates_allowed()
+    // Fork builds opt out at compile time: their package is not signed with
+    // the feed's key, and the official build they would update into does not
+    // read server.json yet.
+    !cfg!(debug_assertions)
+        && option_env!("DOOP_DISABLE_UPDATER").is_none()
+        && crate::server::updates_allowed()
 }
 
 pub fn start(app: &AppHandle) {

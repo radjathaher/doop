@@ -1,0 +1,56 @@
+# Fork-only: builds the macOS (Chromium) shell from this branch and attaches
+# the zipped, ad-hoc signed .app to a release named after the tag. The build
+# carries no server URL; the installing machine points it at its server
+# through server.json. The updater is compiled out so the official feed can
+# never replace this build.
+name: Cakrawala macOS build
+
+on:
+  workflow_dispatch:
+  push:
+    tags: ['cakrawala-v*']
+
+permissions:
+  contents: write
+
+jobs:
+  build-macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: ./.github/actions/setup-desktop
+        with:
+          workspace: desktop/src-tauri-chromium
+      - name: Align Cargo.lock with Cargo.toml
+        shell: bash
+        run: |
+          for crate in desktop/src-tauri:doop-desktop desktop/src-tauri-chromium:doop-desktop-chromium; do
+            dir=${crate%%:*} name=${crate##*:}
+            v=$(sed -n 's/^version = "\(.*\)"/\1/p' "$dir/Cargo.toml" | head -1)
+            perl -0pi -e "s/(name = \"$name\"\nversion = \")[^\"]+/\${1}$v/" "$dir/Cargo.lock"
+          done
+      # Tests compile the shared sources against both Tauri 2 (WebKit) and
+      # Tauri 3 (CEF), so the runtime capability API is checked on each.
+      - run: cargo test --locked
+        working-directory: desktop/src-tauri
+      - run: cargo test --locked
+        working-directory: desktop/src-tauri-chromium
+      - run: bun run build:chromium --bundles app
+        working-directory: desktop
+        env:
+          DOOP_DISABLE_UPDATER: '1'
+      - name: Zip app bundle
+        run: ditto -c -k --keepParent desktop/src-tauri-chromium/target/release/bundle/macos/doop.app doop-macos.zip
+      - uses: actions/upload-artifact@4cec3d8aa04e39d1a68397de0c4cd6fb9dce8ec1 # v4.6.1
+        with:
+          name: doop-macos
+          path: doop-macos.zip
+      - name: Publish release
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" doop-macos.zip \
+            --repo "$GITHUB_REPOSITORY" --title "$GITHUB_REF_NAME" \
+            --notes "macOS Chromium shell built from $GITHUB_SHA with the updater compiled out." \
+            --latest=false
