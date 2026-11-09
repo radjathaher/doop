@@ -11,10 +11,13 @@
 //   3. DOOP_APP_URL at compile time (`DOOP_APP_URL=… bun run build`);
 //   4. https://doop.design.
 //
-// An invalid value is reported on stderr and skipped, so a typo in the file
-// falls back to the next source rather than leaving the window blank. Only
-// the origin is kept: a path in the value is ignored, because the shell
-// always opens <origin>/auth.
+// On macOS, doop ▸ Server… edits server.json from a native sheet, like the
+// iOS app's Settings ▸ Server, and restarts the shell on the new server.
+//
+// Only a whole HTTPS origin is accepted, by the same rule as the iOS app's
+// ServerAddress: no credentials, query, fragment or path. An invalid value is
+// reported on stderr and skipped, so a typo in the file falls back to the next
+// source rather than leaving the window blank.
 //
 // The bundled capability (capabilities/default.json) grants the shell's IPC
 // to the official origins only. For any other server, `grant_ipc` adds the
@@ -111,18 +114,31 @@ fn read_config_file(app: &AppHandle) -> Option<String> {
     parsed.get("url")?.as_str().map(str::to_string)
 }
 
-/// Reduces a configured value to its origin, accepting https anywhere and
-/// plain http only on loopback, where a local instance has no certificate.
+/// Accepts a whole HTTPS origin and returns it without a trailing slash.
 fn normalize(raw: &str) -> Option<String> {
     let url = Url::parse(raw.trim()).ok()?;
-    let loopback = matches!(url.host_str(), Some("localhost" | "127.0.0.1" | "[::1]"));
-    match url.scheme() {
-        "https" => {}
-        "http" if loopback => {}
-        _ => return None,
-    }
-    url.host_str()?;
-    Some(url.origin().ascii_serialization())
+    let whole_origin = url.scheme() == "https"
+        && url.host_str().is_some_and(|host| !host.is_empty())
+        && url.username().is_empty()
+        && url.password().is_none()
+        && url.query().is_none()
+        && url.fragment().is_none()
+        && url.path() == "/";
+    whole_origin.then(|| url.origin().ascii_serialization())
+}
+
+/// Saves the server for the next launch, replacing the file in one step so a
+/// crash mid-write cannot leave half a file behind.
+fn write_config_file(app: &AppHandle, origin: &str) -> std::io::Result<()> {
+    let dir = app
+        .path()
+        .app_config_dir()
+        .map_err(|err| std::io::Error::new(std::io::ErrorKind::NotFound, err.to_string()))?;
+    std::fs::create_dir_all(&dir)?;
+    let staged = dir.join(format!("{CONFIG_FILE}.tmp"));
+    let body = serde_json::to_string_pretty(&serde_json::json!({ "url": origin }))?;
+    std::fs::write(&staged, body + "\n")?;
+    std::fs::rename(&staged, dir.join(CONFIG_FILE))
 }
 
 fn server() -> &'static Server {
@@ -188,29 +204,118 @@ pub fn grant_ipc(app: &AppHandle) -> tauri::Result<()> {
     app.add_capability(capability)
 }
 
+/// doop ▸ Server…: the desktop counterpart of the iOS app's Settings ▸ Server.
+/// It is a native sheet rather than a page, so no web content, from any
+/// server, can reach the code that changes the server.
+#[cfg(target_os = "macos")]
+pub mod menu {
+    use super::*;
+    use objc2::MainThreadMarker;
+    use objc2_app_kit::{NSAlert, NSTextField};
+    use objc2_foundation::{NSSize, NSString};
+    use tauri::menu::MenuItem;
+
+    pub const MENU_ID: &str = "server";
+    const LABEL: &str = "Server…";
+    const FOOTER: &str = "Doop Cloud or your own HTTPS server. Your account and canvases stay on that server.";
+    const INVALID: &str = "Enter an HTTPS address, such as https://doop.example.com.";
+
+    // NSAlert numbers its buttons from NSAlertFirstButtonReturn (1000) in the
+    // order they are added.
+    const SAVE: isize = 1000;
+    const CANCEL: isize = 1001;
+
+    pub fn item(app: &AppHandle) -> tauri::Result<MenuItem<crate::ShellRuntime>> {
+        MenuItem::with_id(app, MENU_ID, LABEL, true, None::<&str>)
+    }
+
+    /// Menu events run on the UI thread, which the modal sheet requires.
+    pub fn open(app: &AppHandle) {
+        let Some(mtm) = MainThreadMarker::new() else {
+            return;
+        };
+        let current = origin().to_string();
+        let mut value = current.clone();
+        let mut note = FOOTER;
+        loop {
+            let (choice, typed) = ask(mtm, &value, note);
+            match choice {
+                SAVE => match normalize(&typed) {
+                    Some(chosen) if chosen == current => return,
+                    Some(chosen) => {
+                        if let Err(err) = write_config_file(app, &chosen) {
+                            eprintln!("doop: could not save {CONFIG_FILE}: {err}");
+                            value = typed;
+                            note = "Could not save the server. Check that the app can write to its settings folder.";
+                            continue;
+                        }
+                        // The IPC grant and the in-window hosts are fixed for
+                        // the life of the process, so the new server starts
+                        // fresh, as it does on iOS.
+                        app.request_restart();
+                        return;
+                    }
+                    None => {
+                        value = typed;
+                        note = INVALID;
+                    }
+                },
+                CANCEL => return,
+                _ => {
+                    value = OFFICIAL.to_string();
+                    note = FOOTER;
+                }
+            }
+        }
+    }
+
+    fn ask(mtm: MainThreadMarker, value: &str, note: &str) -> (isize, String) {
+        let alert = NSAlert::new(mtm);
+        alert.setMessageText(&NSString::from_str("Server"));
+        alert.setInformativeText(&NSString::from_str(note));
+        alert.addButtonWithTitle(&NSString::from_str("Save"));
+        alert.addButtonWithTitle(&NSString::from_str("Cancel"));
+        alert.addButtonWithTitle(&NSString::from_str("Use Doop Cloud"));
+        let field = NSTextField::new(mtm);
+        field.setFrameSize(NSSize::new(320.0, 24.0));
+        field.setStringValue(&NSString::from_str(value));
+        field.setPlaceholderString(Some(&NSString::from_str(OFFICIAL)));
+        alert.setAccessoryView(Some(&field));
+        alert.window().setInitialFirstResponder(Some(&field));
+        let choice = alert.runModal();
+        (choice, field.stringValue().to_string())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn normalize_keeps_only_the_origin() {
+    fn normalize_accepts_a_whole_https_origin() {
+        assert_eq!(normalize("https://doop.example.com").as_deref(), Some("https://doop.example.com"));
         assert_eq!(
-            normalize("https://doop.example.com/auth?x=1").as_deref(),
-            Some("https://doop.example.com")
-        );
-        assert_eq!(
-            normalize(" https://doop.example.com:8443/ ").as_deref(),
+            normalize(" https://Doop.Example.com:8443/ ").as_deref(),
             Some("https://doop.example.com:8443")
         );
-        assert_eq!(normalize("http://localhost:4300").as_deref(), Some("http://localhost:4300"));
     }
 
+    /// The same rule as the iOS app's ServerAddress.
     #[test]
-    fn normalize_rejects_insecure_and_malformed_values() {
-        assert_eq!(normalize("http://doop.example.com"), None);
-        assert_eq!(normalize("doop.example.com"), None);
-        assert_eq!(normalize("file:///etc/passwd"), None);
-        assert_eq!(normalize(""), None);
+    fn normalize_rejects_anything_but_a_whole_https_origin() {
+        for raw in [
+            "http://doop.example.com",
+            "http://localhost:4300",
+            "doop.example.com",
+            "file:///etc/passwd",
+            "https://doop.example.com/auth",
+            "https://doop.example.com/?x=1",
+            "https://doop.example.com/#top",
+            "https://user:secret@doop.example.com",
+            "",
+        ] {
+            assert_eq!(normalize(raw), None, "{raw}");
+        }
     }
 
     /// The runtime capability must grant exactly what the bundled one does,

@@ -8,8 +8,11 @@ needs a new release when the shell itself changes (icon, menu, Tauri bump).
 The released installers (macOS DMG, Windows NSIS setup, and the Linux AppImage,
 .deb and .rpm) talk to the hosted
 service at doop.design. Self-hosting your own doop instance? Point the
-released app at it, no build needed, by putting its origin in `server.json`
-in the app's config directory:
+released app at it, no build needed. On macOS, choose **doop ▸ Server…**,
+enter its HTTPS address and save; the app restarts on that server, like the
+iOS app's Settings ▸ Server. The choice is stored as `server.json` in the
+app's config directory, which you can also write yourself (on Windows and
+Linux, or from a provisioning tool):
 
 ```sh
 # macOS; Windows: %APPDATA%\design.doop.desktop, Linux: ~/.config/design.doop.desktop

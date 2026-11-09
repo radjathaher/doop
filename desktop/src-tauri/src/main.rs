@@ -153,6 +153,7 @@ fn build_menu(app: &AppHandle) -> tauri::Result<Menu<ShellRuntime>> {
         &[
             &PredefinedMenuItem::about(app, None, Some(about))?,
             &updates::menu::item(app)?,
+            &server::menu::item(app)?,
             &PredefinedMenuItem::separator(app)?,
             &PredefinedMenuItem::services(app, None)?,
             &PredefinedMenuItem::separator(app)?,
@@ -291,6 +292,8 @@ fn main() {
             let _ = app.emit(CLOSE_TAB, ());
         } else if event.id() == updates::menu::MENU_ID {
             updates::menu::check(app);
+        } else if event.id() == server::menu::MENU_ID {
+            server::menu::open(app);
         } else {
             view_menu::relay(app, event.id().as_ref());
         }

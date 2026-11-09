@@ -32,6 +32,9 @@ tokio = { version = "1", features = ["time"] }
 # AppKit resets them on window events, so the shell moves them itself.
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2-app-kit = { version = "0.3", features = ["NSButton", "NSControl", "NSResponder", "NSView", "NSWindow"] }
+# The native doop ▸ Server… sheet (server.rs)
+objc2 = "0.6"
+objc2-foundation = { version = "0.3", features = ["NSGeometry", "NSString"] }
 
 [profile.release]
 strip = true
