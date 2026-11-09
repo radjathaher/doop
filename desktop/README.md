@@ -7,15 +7,22 @@ needs a new release when the shell itself changes (icon, menu, Tauri bump).
 
 The released installers (macOS DMG, Windows NSIS setup, and the Linux AppImage,
 .deb and .rpm) talk to the hosted
-service at doop.design. Self-hosting your own doop instance? Build a shell for
-it without patching anything:
+service at doop.design. Self-hosting your own doop instance? Point the
+released app at it, no build needed, by putting its origin in `server.json`
+in the app's config directory:
 
 ```sh
-DOOP_APP_URL=https://doop.example.com bun run build
+# macOS; Windows: %APPDATA%\design.doop.desktop, Linux: ~/.config/design.doop.desktop
+mkdir -p ~/Library/Application\ Support/design.doop.desktop
+echo '{"url": "https://doop.example.com"}' \
+  > ~/Library/Application\ Support/design.doop.desktop/server.json
 ```
 
-The URL is baked in at compile time (`src-tauri/src/main.rs`); the in-shell
-navigation allowlist follows it automatically.
+`DOOP_APP_URL` in the app's environment overrides the file, and
+`DOOP_APP_URL=https://doop.example.com bun run build` bakes a default into a
+custom build. The shell keeps only the origin, opens `<origin>/auth`, keeps
+that host in-window, and grants it the same IPC as the hosted app at runtime
+(`src-tauri/src/server.rs`), so `capabilities/default.json` stays unchanged.
 
 Links outside doop.design open in the system browser (`src-tauri/src/main.rs`).
 Google / Microsoft / SSO sign-in runs there too: identity providers refuse
@@ -42,9 +49,9 @@ version in the background and asks to restart into it. **Later** keeps the
 download: macOS installs it when the app quits, Windows and Linux ask again at
 the next check. On macOS, **doop → Check for Updates…** runs the same check on demand
 and also reports "up to date" and failures; Windows and Linux have no menu bar and rely
-on the scheduled checks. Debug builds and custom `DOOP_APP_URL` builds never
-update (replacing a self-hosted shell with the official one would change its
-server).
+on the scheduled checks. Debug builds and builds with `DOOP_APP_URL` baked in
+never update (the official build would drop that server); a server chosen
+through `server.json` or the environment survives updates.
 
 The feed and its packages are produced by `desktop-release.yml`:
 

@@ -8,7 +8,8 @@
 // strip at the top of the page (src/components/DesktopTabs.tsx) and leaves
 // room for the traffic lights. Tabs are purely a web-app concept — the shell
 // only marks the page as desktop; opening links in the system browser goes
-// through the opener plugin, granted in capabilities/default.json.
+// through the opener plugin, granted in capabilities/default.json (and, for a
+// self-hosted server, at runtime by server.rs).
 //
 // Because tabs live in the page, the macOS menu is built here rather than
 // taken from Tauri's default: that one binds Cmd+W to "Close Window", which
@@ -51,6 +52,7 @@ mod claude;
 mod claude_extension;
 mod codex;
 mod fonts;
+mod server;
 mod updates;
 mod view_menu;
 #[cfg(all(chromium, target_os = "macos"))]
@@ -77,30 +79,6 @@ fn focus_main_window(app: &AppHandle) {
     if let Some(window) = app.get_webview_window("main") {
         let _ = window.unminimize();
         let _ = window.set_focus();
-    }
-}
-
-/// The hosted app this shell wraps. Self-hosters can point release builds at
-/// their own instance without patching the source:
-///   DOOP_APP_URL=https://doop.example.com npm run build
-/// (When overriding, also put the origin in capabilities/default.json or the
-/// page cannot reach the shell's IPC — external links then open in-window.)
-const APP_URL: &str = match option_env!("DOOP_APP_URL") {
-    Some(url) => url,
-    None => "https://doop.design",
-};
-
-fn base_url() -> String {
-    if cfg!(debug_assertions) {
-        // A second worktree runs its dev pair on other ports (vite.config.ts);
-        // DOOP_DEV_URL points a dev shell at it. Keep tauri.conf.json's devUrl
-        // in step so IPC keeps treating the pages as local.
-        option_env!("DOOP_DEV_URL")
-            .unwrap_or("http://localhost:4300")
-            .trim_end_matches('/')
-            .to_string()
-    } else {
-        APP_URL.trim_end_matches('/').to_string()
     }
 }
 
@@ -344,10 +322,12 @@ fn main() {
             appimage::integrate(app.handle());
             let focus_handle = app.handle().clone();
             app.deep_link().on_open_url(move |_event| focus_main_window(&focus_handle));
+            server::init(app.handle());
+            server::grant_ipc(app.handle())?;
             updates::start(app.handle());
 
             let handle = app.handle().clone();
-            let entry = format!("{}/auth", base_url());
+            let entry = format!("{}/auth", server::base_url());
             // The first Chromium launch after the WebKit app opens hidden on
             // the app's origin and brings the WebKit storage over before the
             // app loads (src/webkit_migration.rs).
@@ -358,7 +338,7 @@ fn main() {
             let first_url: Url = if migrating {
                 #[cfg(all(chromium, target_os = "macos"))]
                 {
-                    let origin = Url::parse(&base_url())?;
+                    let origin = Url::parse(&server::base_url())?;
                     webkit_migration::start(app.handle(), origin.clone(), entry.parse()?);
                     webkit_migration::landing(&origin)
                 }
@@ -374,7 +354,7 @@ fn main() {
             // go to the system handler (Mail) instead.
             let mut app_hosts: Vec<String> =
                 vec!["localhost".into(), "127.0.0.1".into()];
-            if let Some(host) = Url::parse(APP_URL)?.host_str() {
+            if let Some(host) = Url::parse(server::origin())?.host_str() {
                 app_hosts.push(host.to_string());
                 app_hosts.push(match host.strip_prefix("www.") {
                     Some(bare) => bare.to_string(),
