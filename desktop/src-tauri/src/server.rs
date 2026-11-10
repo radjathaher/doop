@@ -90,7 +90,7 @@ pub fn init(app: &AppHandle) {
         .find_map(|(raw, source)| match normalize(&raw) {
             Some(origin) => Some(Server { origin, source }),
             None => {
-                eprintln!("doop: ignoring server URL {raw:?} from {source:?}: expected an http(s) origin");
+                eprintln!("doop: ignoring server URL {raw:?} from {source:?}: expected a whole https origin");
                 None
             }
         })
