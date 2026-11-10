@@ -778,7 +778,7 @@ fn run_cli(app: &AppHandle, job: &Value, cancel: Arc<AtomicBool>) -> Result<Valu
             use std::os::unix::fs::OpenOptionsExt;
             options.mode(0o600);
         }
-        // Server URL is compiled into the app; a web page cannot choose an arbitrary target.
+        // The shell chooses the server (server.rs); a web page cannot choose an arbitrary target.
         let mcp = json!({"mcpServers":{"doop":{"type":"http", "url":format!("{}/local-agent/mcp/{}", crate::server::base_url(), id), "headers":{"Authorization":format!("Bearer {}", token)}}}});
         options
             .open(&config)
